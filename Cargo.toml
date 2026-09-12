@@ -1,0 +1,38 @@
+[package]
+name = "orchestrator-core"
+version = "0.2.0"
+edition = "2021"
+authors = ["Nexus Team"]
+description = "Nexus — asset-centric data & AI orchestrator (core engine)"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.37", features = ["full"] }
+tokio-util = "0.7"
+
+# Web framework (driving adapter)
+axum = "0.7"
+tower = { version = "0.4", features = ["util"] }
+tower-http = { version = "0.5", features = ["trace", "cors"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Database (driven adapter)
+sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite", "uuid", "chrono", "migrate"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Observability
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+uuid = { version = "1.8", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+async-trait = "0.1"
+bcrypt = "0.15"
+jsonwebtoken = "9.3"
