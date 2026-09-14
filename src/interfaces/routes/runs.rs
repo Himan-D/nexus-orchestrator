@@ -1,7 +1,8 @@
 use axum::extract::{Path, Query, State};
-use axum::Json;
+use axum::{Extension, Json};
 use uuid::Uuid;
 
+use crate::application::auth::AuthedUser;
 use crate::domain::run::RunStatus;
 use crate::interfaces::dto::{ListResponse, RunDetailResponse, RunListQuery, RunResponse, TaskRunResponse};
 use crate::interfaces::error::ApiError;
@@ -38,12 +39,23 @@ pub async fn get_run(
 
 /// Cancels a run. Queued runs are cancelled atomically in the DB (racing the
 /// scheduler's claim); running runs get their cancellation token fired and
-/// finalize as cancelled by the run engine.
+/// finalize as cancelled by the run engine. Owner-only, like all writes.
 pub async fn cancel(
     State(state): State<AppState>,
+    Extension(user): Extension<AuthedUser>,
     Path(id): Path<Uuid>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let run = state.runs.get(id).await?.ok_or_else(|| ApiError::not_found("run"))?;
+
+    // Cancelling counts as a write: only the owning pipeline's owner may.
+    let job = state
+        .jobs
+        .get(run.job_id)
+        .await?
+        .ok_or_else(|| ApiError::not_found("job"))?;
+    if job.owner_id != user.id {
+        return Err(ApiError::forbidden("only the pipeline owner can cancel its runs"));
+    }
 
     if run.status.is_terminal() {
         return Err(ApiError::conflict(format!("run is already {}", run.status)));

@@ -7,8 +7,16 @@ COPY migrations ./migrations
 RUN cargo build --release
 
 FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN groupadd --system nexus && useradd --system --gid nexus --create-home nexus
 COPY --from=builder /build/target/release/orchestrator-core /usr/local/bin/nexus-core
-ENV ORCH_BIND=0.0.0.0:3002
+# The SQLite volume lives under the user's home; pre-create so the mount
+# lands on an owned directory.
+RUN mkdir -p /home/nexus/data && chown -R nexus:nexus /home/nexus
+USER nexus
+WORKDIR /home/nexus
+ENV ORCH_BIND=0.0.0.0:3002 ORCH_DB_URL=sqlite:///home/nexus/data/orchestrator.db?mode=rwc
 EXPOSE 3002
+# Runtime image ships without curl/wget on purpose; the binary self-probes.
+HEALTHCHECK --interval=10s --timeout=3s --retries=5 \
+  CMD ["nexus-core", "--probe"]
 ENTRYPOINT ["/usr/local/bin/nexus-core"]

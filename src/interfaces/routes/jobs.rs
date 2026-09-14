@@ -4,6 +4,7 @@ use axum::{Extension, Json};
 use uuid::Uuid;
 
 use crate::application::auth::AuthedUser;
+use crate::application::schedules;
 use crate::domain::job::Job;
 use crate::domain::run::Run;
 use crate::interfaces::dto::{
@@ -12,13 +13,37 @@ use crate::interfaces::dto::{
 use crate::interfaces::error::ApiError;
 use crate::interfaces::AppState;
 
+/// Writes are owner-only. Reads stay open to any authenticated user — the
+/// platform treats pipelines as shared team artifacts; scope to teams when
+/// RBAC lands.
+fn ensure_owner(job: &Job, user: &AuthedUser) -> Result<(), ApiError> {
+    if job.owner_id == user.id {
+        Ok(())
+    } else {
+        Err(ApiError::forbidden("only the pipeline owner can modify it"))
+    }
+}
+
+/// Normalizes the optional schedule: empty string clears it, otherwise it
+/// must parse as a cron expression.
+fn normalize_schedule(raw: &Option<String>) -> Result<Option<String>, ApiError> {
+    match raw.as_deref().map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(expr) => {
+            schedules::parse(expr).map_err(|e| ApiError::bad_request(e.to_string()))?;
+            Ok(Some(expr.to_string()))
+        }
+    }
+}
+
 pub async fn create(
     State(state): State<AppState>,
     Extension(user): Extension<AuthedUser>,
     Json(payload): Json<CreateJobRequest>,
 ) -> Result<(StatusCode, Json<JobResponse>), ApiError> {
     let tasks = payload.tasks.into_iter().map(|t| t.into_domain()).collect();
-    let job = Job::new(payload.name, payload.description, tasks, user.id);
+    let mut job = Job::new(payload.name, payload.description, tasks, user.id);
+    job.schedule = normalize_schedule(&payload.schedule)?;
     job.validate()?;
     state.jobs.create(&job).await?;
     Ok((StatusCode::CREATED, Json(JobResponse::from_domain(&job))))
@@ -47,10 +72,12 @@ pub async fn get_job(
 
 pub async fn update(
     State(state): State<AppState>,
+    Extension(user): Extension<AuthedUser>,
     Path(id): Path<Uuid>,
     Json(payload): Json<UpdateJobRequest>,
 ) -> Result<Json<JobResponse>, ApiError> {
     let mut job = state.jobs.get(id).await?.ok_or_else(|| ApiError::not_found("job"))?;
+    ensure_owner(&job, &user)?;
 
     if let Some(name) = payload.name {
         job.name = name;
@@ -64,6 +91,10 @@ pub async fn update(
     if let Some(tasks) = payload.tasks {
         job.tasks = tasks.into_iter().map(|t| t.into_domain()).collect();
     }
+    job.schedule = normalize_schedule(&payload.schedule)?;
+    // A schedule change restarts the cron window so it doesn't fire
+    // immediately for time already "elapsed" under the old expression.
+    job.last_enqueued_at = None;
     job.updated_at = chrono::Utc::now();
     job.validate()?; // full revalidation after any change
     state.jobs.update(&job).await?;
@@ -74,8 +105,11 @@ pub async fn update(
 /// the job name, so audit history survives definition deletion.
 pub async fn delete_job(
     State(state): State<AppState>,
+    Extension(user): Extension<AuthedUser>,
     Path(id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    let job = state.jobs.get(id).await?.ok_or_else(|| ApiError::not_found("job"))?;
+    ensure_owner(&job, &user)?;
     state.jobs.delete(id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -86,6 +120,7 @@ pub async fn trigger(
     Path(id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<RunResponse>), ApiError> {
     let job = state.jobs.get(id).await?.ok_or_else(|| ApiError::not_found("job"))?;
+    ensure_owner(&job, &user)?;
     if !job.enabled {
         return Err(ApiError::conflict("job is paused; enable it before triggering"));
     }

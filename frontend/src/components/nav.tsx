@@ -41,6 +41,9 @@ export function Nav() {
           <Link href="/assets" className="px-3 py-1.5 rounded-md hover:bg-accent transition-colors">
             Assets
           </Link>
+          <Link href="/lineage" className="px-3 py-1.5 rounded-md hover:bg-accent transition-colors">
+            Lineage
+          </Link>
           {checked && user && (
             <div className="flex items-center gap-3 ml-4 pl-4 border-l">
               <span className="text-muted-foreground text-xs">{user.email}</span>

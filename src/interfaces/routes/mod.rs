@@ -8,6 +8,7 @@ use axum::extract::State;
 use axum::Json;
 use serde::Serialize;
 
+use crate::application::lineage::{self, LineageGraph};
 use crate::domain::run::RunStatus;
 use crate::interfaces::{error::ApiError, AppState};
 
@@ -39,4 +40,14 @@ pub async fn stats(
         runs_by_status.entry(s.to_string()).or_insert(0);
     }
     Ok(Json(StatsResponse { jobs, assets, runs_by_status }))
+}
+
+/// The asset dependency graph derived from pipeline definitions, with
+/// per-asset staleness (upstream fresher than downstream).
+pub async fn lineage_route(
+    State(state): State<AppState>,
+) -> Result<Json<LineageGraph>, ApiError> {
+    let jobs = state.jobs.list(1000, 0).await?;
+    let assets = state.assets.list(2000, 0).await?;
+    Ok(Json(lineage::compute_lineage(&jobs, &assets)))
 }

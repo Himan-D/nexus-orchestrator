@@ -24,6 +24,18 @@ impl ApiError {
         Self { status: StatusCode::UNAUTHORIZED, code: "unauthorized", message: message.into() }
     }
 
+    pub fn forbidden(message: impl Into<String>) -> Self {
+        Self { status: StatusCode::FORBIDDEN, code: "forbidden", message: message.into() }
+    }
+
+    pub fn too_many_requests(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            code: "rate_limited",
+            message: message.into(),
+        }
+    }
+
     pub fn not_found(what: &str) -> Self {
         Self { status: StatusCode::NOT_FOUND, code: "not_found", message: format!("{what} not found") }
     }

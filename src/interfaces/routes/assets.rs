@@ -1,7 +1,10 @@
+use std::collections::HashMap;
+
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use serde::Serialize;
 
+use crate::application::lineage;
 use crate::interfaces::dto::{ListResponse, PageQuery};
 use crate::interfaces::error::ApiError;
 use crate::interfaces::AppState;
@@ -13,10 +16,13 @@ pub struct AssetResponse {
     pub description: String,
     pub last_run_id: Option<uuid::Uuid>,
     pub last_materialized_at: Option<String>,
+    /// True when an upstream input is fresher than this asset (or it has
+    /// never been materialized) — the "needs re-run" signal.
+    pub stale: bool,
 }
 
 impl AssetResponse {
-    fn from_domain(a: &crate::domain::asset::Asset) -> Self {
+    fn from_domain(a: &crate::domain::asset::Asset, stale: bool) -> Self {
         Self {
             key: a.key.clone(),
             name: a.name.clone(),
@@ -25,6 +31,7 @@ impl AssetResponse {
             last_materialized_at: a
                 .last_materialized_at
                 .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+            stale,
         }
     }
 }
@@ -50,8 +57,21 @@ pub async fn list(
     let (limit, offset) = page.clamp();
     let assets = state.assets.list(limit, offset).await?;
     let total = state.assets.count().await?;
+    // Staleness is derived from lineage over pipeline definitions.
+    let jobs = state.jobs.list(1000, 0).await?;
+    let graph = lineage::compute_lineage(&jobs, &assets);
+    let stale: HashMap<String, bool> = graph
+        .nodes
+        .into_iter()
+        .map(|n| (n.key, n.stale))
+        .collect();
     Ok(Json(ListResponse {
-        items: assets.iter().map(AssetResponse::from_domain).collect(),
+        items: assets
+            .iter()
+            .map(|a| {
+                AssetResponse::from_domain(a, stale.get(&a.key).copied().unwrap_or(false))
+            })
+            .collect(),
         total: Some(total),
     }))
 }
@@ -69,7 +89,7 @@ pub async fn detail(
         .ok_or_else(|| ApiError::not_found("asset"))?;
     let mats = state.assets.materializations(&key, 50).await?;
     Ok(Json(AssetDetailResponse {
-        asset: AssetResponse::from_domain(&asset),
+        asset: AssetResponse::from_domain(&asset, false),
         materializations: mats
             .iter()
             .map(|m| MaterializationResponse {

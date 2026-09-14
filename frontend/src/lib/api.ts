@@ -9,6 +9,7 @@ export type Task = {
   name: string;
   command: string;
   depends_on: string[];
+  asset_inputs: string[];
   materializes?: string | null;
   timeout_secs: number;
   max_retries: number;
@@ -21,6 +22,7 @@ export type Job = {
   description: string;
   tasks: Task[];
   enabled: boolean;
+  schedule: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -55,7 +57,18 @@ export type Asset = {
   description: string;
   last_run_id: string | null;
   last_materialized_at: string | null;
+  stale: boolean;
 };
+
+export type LineageNode = {
+  key: string;
+  layer: number;
+  last_materialized_at: string | null;
+  stale: boolean;
+};
+
+export type LineageEdge = { from: string; to: string };
+export type LineageGraph = { nodes: LineageNode[]; edges: LineageEdge[] };
 
 export type User = { id: string; email: string };
 export type ListResponse<T> = { items: T[]; total: number | null };

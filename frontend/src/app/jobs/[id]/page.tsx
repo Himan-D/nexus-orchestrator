@@ -87,11 +87,16 @@ export default function JobDetailPage() {
     <div className="mx-auto max-w-7xl p-8 flex flex-col gap-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-2xl font-bold tracking-tight">{job.name}</h1>
             <Badge variant={job.enabled ? "secondary" : "outline"}>
               {job.enabled ? "active" : "paused"}
             </Badge>
+            {job.schedule && (
+              <span className="font-mono text-xs text-muted-foreground border rounded px-2 py-0.5">
+                ⏰ {job.schedule} UTC
+              </span>
+            )}
           </div>
           {job.description && <p className="text-muted-foreground text-sm mt-1">{job.description}</p>}
         </div>
@@ -126,6 +131,9 @@ export default function JobDetailPage() {
                 </pre>
                 <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
                   {t.depends_on.length > 0 && <span>after: {t.depends_on.join(", ")}</span>}
+                  {t.asset_inputs.length > 0 && (
+                    <span className="font-mono">reads: {t.asset_inputs.join(", ")}</span>
+                  )}
                   {t.materializes && (
                     <span className="text-purple-400 font-mono">→ {t.materializes}</span>
                   )}

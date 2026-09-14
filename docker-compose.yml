@@ -1,33 +1,46 @@
 services:
-  backend:
-    build: .
-    environment:
+  # Serves the HTTP API only (no run execution).
+  api:
+    build:
+      context: .
+    environment: &core-env
       # Generate a real secret for anything beyond local dev:
       #   openssl rand -hex 32
       ORCH_JWT_SECRET: ${ORCH_JWT_SECRET:?set ORCH_JWT_SECRET in .env}
-      ORCH_DB_URL: sqlite:///data/orchestrator.db?mode=rwc
+      ORCH_DB_URL: sqlite:///home/nexus/data/orchestrator.db?mode=rwc
       ORCH_BIND: 0.0.0.0:3002
       ORCH_COOKIE_SECURE: "0"
+      ORCH_ROLE: api
     volumes:
-      - orchestrator-data:/data
+      - orchestrator-data:/home/nexus/data
     ports:
       - "3002:3002"
+
+  # Claims queued runs from the shared database and executes them.
+  worker:
+    build:
+      context: .
+    environment:
+      <<: *core-env
+      ORCH_ROLE: worker
+      ORCH_BIND: 0.0.0.0:3033 # probe target; no HTTP API served
+    volumes:
+      - orchestrator-data:/home/nexus/data
+    # The image healthcheck probes the HTTP listener, which a worker doesn't
+    # serve — mark it healthy once the process is up.
     healthcheck:
-      test: ["CMD", "sh", "-c", "command -v curl >/dev/null && curl -sf http://127.0.0.1:3002/readyz || wget -qO- http://127.0.0.1:3002/readyz"]
-      interval: 10s
-      timeout: 3s
-      retries: 5
+      disable: true
 
   frontend:
     build:
       context: .
       dockerfile: Dockerfile.frontend
     environment:
-      BACKEND_URL: http://backend:3002
+      BACKEND_URL: http://api:3002
     ports:
       - "3000:3000"
     depends_on:
-      backend:
+      api:
         condition: service_healthy
 
 volumes:

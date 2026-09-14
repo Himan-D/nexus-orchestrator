@@ -76,16 +76,21 @@ export default function AssetsPage() {
                     )}
                   </TableCell>
                   <TableCell>
-                    <Badge
-                      variant="outline"
-                      className={
-                        a.last_materialized_at
-                          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-500"
-                          : ""
-                      }
-                    >
-                      {relative(a.last_materialized_at)}
-                    </Badge>
+                    <div className="flex items-center gap-2">
+                      <Badge
+                        variant="outline"
+                        className={
+                          a.stale
+                            ? "border-amber-500/30 bg-amber-500/10 text-amber-500"
+                            : "border-emerald-500/30 bg-emerald-500/10 text-emerald-500"
+                        }
+                      >
+                        {a.stale ? "stale" : "fresh"}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground">
+                        {relative(a.last_materialized_at)}
+                      </span>
+                    </div>
                   </TableCell>
                   <TableCell>
                     {a.last_run_id ? (

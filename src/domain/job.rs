@@ -19,6 +19,9 @@ pub struct Task {
     pub command: String,
     #[serde(default)]
     pub depends_on: Vec<String>,
+    /// Asset keys this task reads (upstream inputs — used for lineage).
+    #[serde(default)]
+    pub asset_inputs: Vec<String>,
     /// Optional asset key this task materializes, e.g. "warehouse.users".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub materializes: Option<String>,
@@ -49,6 +52,13 @@ pub struct Job {
     pub tasks: Vec<Task>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    /// Optional cron expression (UTC, 5-field standard syntax) that
+    /// auto-triggers runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schedule: Option<String>,
+    /// Scheduler bookkeeping: the last time the cron enqueued a run.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_enqueued_at: Option<DateTime<Utc>>,
     pub owner_id: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -72,6 +82,8 @@ impl Job {
             description: description.into(),
             tasks,
             enabled: true,
+            schedule: None,
+            last_enqueued_at: None,
             owner_id,
             created_at: now,
             updated_at: now,
@@ -118,6 +130,14 @@ impl Job {
                     field: format!("task {}.command", task.id),
                     reason: format!("exceeds {MAX_COMMAND_LEN} characters"),
                 });
+            }
+            for key in &task.asset_inputs {
+                if !super::asset::Asset::validate_key(key) {
+                    return Err(DomainError::InvalidValue {
+                        field: format!("task {}.asset_inputs", task.id),
+                        reason: format!("invalid asset key '{key}'"),
+                    });
+                }
             }
             if task.timeout_secs == 0 || task.timeout_secs > 86_400 {
                 return Err(DomainError::InvalidValue {
@@ -221,6 +241,7 @@ mod tests {
             name: id.into(),
             command: "echo hi".into(),
             depends_on: deps.iter().map(|s| s.to_string()).collect(),
+            asset_inputs: vec![],
             materializes: None,
             timeout_secs: 60,
             max_retries: 0,

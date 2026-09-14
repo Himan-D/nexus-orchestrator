@@ -72,12 +72,17 @@ docker compose up --build       # UI on :3000, API on :3002, data in a named vol
 | ----------------------- | -------------------------------- | ---------------------------------------------- |
 | `ORCH_JWT_SECRET`       | — (required unless dev mode)     | ≥32-char JWT signing secret                    |
 | `ORCH_DB_URL`           | `sqlite://data/orchestrator.db?mode=rwc` | SQLite connection URL                  |
-| `ORCH_BIND`             | `0.0.0.0:3002`                   | API bind address                               |
+| `ORCH_BIND`             | `0.0.0.0:3002` (`127.0.0.1` in dev mode) | API bind address                      |
+| `ORCH_ROLE`             | `all`                            | `all` \| `api` (HTTP only) \| `worker` (execution only) |
 | `ORCH_DEV_MODE`         | off                              | Allows ephemeral JWT secret for local dev      |
 | `ORCH_COOKIE_SECURE`    | `0`                              | Set `Secure` on session cookies (use behind TLS)|
 | `ORCH_CORS_ORIGIN`      | —                                | Optional exact origin for credential CORS      |
 | `ORCH_SCHED_TICK_SECS`  | `1`                              | Scheduler poll interval                        |
 | `ORCH_SCHED_BATCH`      | `10`                             | Max runs claimed per tick                      |
+| `ORCH_MAX_CONCURRENT_RUNS` | `4`                           | In-flight run cap (execution flood guard)      |
+| `ORCH_MAX_PARALLEL_TASKS` | `8`                            | Per-run task parallelism cap                   |
+| `ORCH_AUTH_RATE_LIMIT_PER_MIN` | `30`                       | Auth attempts per IP per minute                |
+| `ORCH_REQUEST_TIMEOUT_SECS` | `30`                         | HTTP request timeout                           |
 | `ORCH_SHUTDOWN_GRACE_SECS` | `30`                          | Drain window on SIGINT/SIGTERM                 |
 
 ## API sketch
@@ -106,13 +111,42 @@ recorded as materializations and update the asset's freshness pointer.
 - **Failures cascade**: a failed task skips its dependents (marked `skipped`) and fails the
   run with the task's error and captured logs.
 - **Deleting a pipeline never rewrites history** — runs keep a name snapshot.
+- **Writes are owner-scoped**: only a pipeline's owner can edit, delete, trigger, or cancel
+  it; auth endpoints are rate-limited per IP.
+- **Resource caps**: concurrent runs and per-run task parallelism are bounded, so a flood of
+  triggers cannot fork-bomb the host.
+
+## Schedules, lineage & staleness
+
+- Pipelines may carry a **cron schedule** (5-field, UTC). The scheduler enqueues runs at each
+  fire time; missed fires during downtime coalesce into one catch-up run. Invalid cron is
+  rejected at the API.
+- Tasks declare `asset_inputs` (what they read) and `materializes` (what they produce).
+  From these, `GET /v1/lineage` derives the **asset dependency graph** with topological
+  layers, rendered as a DAG in the UI (`/lineage`).
+- An asset is **stale** when it has never been materialized or when an upstream input was
+  materialized more recently — the "needs a re-run" signal Dagster users know, propagated
+  to the asset catalog (`/assets`).
+
+## Deployment topology
+
+`ORCH_ROLE` splits control plane from execution:
+
+- `all` — single process (default; local dev).
+- `api` — serves HTTP only; run execution delegated to workers.
+- `worker` — claims queued runs from the shared database and executes them; serves no HTTP.
+
+`docker compose up` runs this topology for real: `api` + `worker` containers over one
+SQLite volume (WAL), the slim standalone frontend, and image healthchecks via the binary's
+built-in `nexus-core --probe` (no curl in the runtime image).
 
 ## Tests
 
 ```bash
-cargo test        # 32 tests: domain state machines, DAG validation, auth,
+cargo test        # 48 tests: domain state machines, DAG validation, auth,
+                  # cron parsing/due-ness, lineage layers & staleness,
                   # repository round-trips, executor kill/timeout/cancel,
-                  # end-to-end run execution + asset materialization
+                  # end-to-end runs, and HTTP-level integration tests
 ```
 
 ## Roadmap to Dagster parity
@@ -125,11 +159,11 @@ scale additionally needs, in rough order:
    environments; the port makes the swap mechanical).
 2. **Postgres adapter** — the ports are in place; add connection pooling + `SELECT … FOR
    UPDATE SKIP LOCKED` claiming for multi-node schedulers.
-3. **Schedules & sensors** — cron schedules on jobs, file/API sensors that trigger runs.
-4. **RBAC & teams** — per-project namespaces, roles, SSO (OIDC).
-5. **Lineage & partitions** — asset dependency graphs derived from `materializes` +
-   `depends_on`, partitioned runs/backfills.
-6. **Observability** — OpenTelemetry export, Prometheus metrics, log streaming (WebSocket)
-   instead of post-hoc logs.
-7. **Queue decoupling** — external run queue (Redis/Postgres LISTEN/NOTIFY) to scale
-   workers independently of the API.
+3. **Sensors & partitions** — cron schedules and lineage/staleness have landed; next are
+   file/API sensors that trigger runs and partitioned backfills.
+4. **RBAC & teams** — per-project namespaces, roles, SSO (OIDC). Owner-only writes are
+   enforced today; team scoping generalizes it.
+5. **Observability** — OpenTelemetry export, Prometheus metrics, live log streaming
+   (WebSocket/SSE) instead of post-hoc logs.
+6. **Secrets management** — per-job environment templates with secret references resolved
+   by the executor at run time.

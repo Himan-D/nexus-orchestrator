@@ -15,6 +15,7 @@ const SAMPLE_TASKS = `[
     "name": "Extract data",
     "command": "echo 'Fetching data...'; sleep 1; echo done",
     "depends_on": [],
+    "asset_inputs": [],
     "materializes": "staging.raw_events",
     "timeout_secs": 300,
     "max_retries": 1,
@@ -25,6 +26,7 @@ const SAMPLE_TASKS = `[
     "name": "Load to warehouse",
     "command": "echo 'Loading...'; sleep 1; echo done",
     "depends_on": ["extract"],
+    "asset_inputs": ["staging.raw_events"],
     "materializes": "warehouse.events"
   }
 ]`;
@@ -34,6 +36,7 @@ export default function JobsPage() {
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [schedule, setSchedule] = useState("");
   const [tasksJson, setTasksJson] = useState(SAMPLE_TASKS);
   const [error, setError] = useState<string | null>(null);
 
@@ -64,10 +67,11 @@ export default function JobsPage() {
     try {
       await api("/jobs", {
         method: "POST",
-        body: JSON.stringify({ name, description, tasks }),
+        body: JSON.stringify({ name, description, schedule: schedule || null, tasks }),
       });
       setName("");
       setDescription("");
+      setSchedule("");
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Failed to create pipeline");
@@ -113,6 +117,17 @@ export default function JobsPage() {
                 />
               </div>
             </div>
+            <div className="space-y-2 md:max-w-xs">
+              <label className="text-sm font-medium">Schedule (cron, UTC — optional)</label>
+              <Input
+                value={schedule}
+                onChange={(e) => setSchedule(e.target.value)}
+                placeholder="*/30 * * * *"
+              />
+              <p className="text-xs text-muted-foreground">
+                Standard 5-field cron. Empty = manual runs only.
+              </p>
+            </div>
             <div className="space-y-2">
               <label className="text-sm font-medium">Tasks (JSON)</label>
               <textarea
@@ -141,13 +156,14 @@ export default function JobsPage() {
                 <TableHead>Name</TableHead>
                 <TableHead>Tasks</TableHead>
                 <TableHead>Assets produced</TableHead>
+                <TableHead>Schedule</TableHead>
                 <TableHead>State</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {jobs.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={4} className="text-center h-24 text-muted-foreground">
+                  <TableCell colSpan={5} className="text-center h-24 text-muted-foreground">
                     No pipelines yet.
                   </TableCell>
                 </TableRow>
@@ -165,6 +181,13 @@ export default function JobsPage() {
                   <TableCell>{j.tasks.length}</TableCell>
                   <TableCell className="font-mono text-xs text-muted-foreground">
                     {j.tasks.map((t) => t.materializes).filter(Boolean).join(", ") || "—"}
+                  </TableCell>
+                  <TableCell>
+                    {j.schedule ? (
+                      <span className="font-mono text-xs">{j.schedule}</span>
+                    ) : (
+                      <span className="text-muted-foreground text-xs">manual</span>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Badge variant={j.enabled ? "secondary" : "outline"}>

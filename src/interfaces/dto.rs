@@ -20,6 +20,9 @@ pub struct CreateJobRequest {
     #[serde(default)]
     pub description: String,
     pub tasks: Vec<TaskDto>,
+    /// Optional cron expression (UTC) for automatic runs.
+    #[serde(default)]
+    pub schedule: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -28,6 +31,7 @@ pub struct UpdateJobRequest {
     pub description: Option<String>,
     pub enabled: Option<bool>,
     pub tasks: Option<Vec<TaskDto>>,
+    pub schedule: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -37,6 +41,8 @@ pub struct TaskDto {
     pub command: String,
     #[serde(default)]
     pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub asset_inputs: Vec<String>,
     #[serde(default)]
     pub materializes: Option<String>,
     #[serde(default)]
@@ -54,6 +60,7 @@ impl TaskDto {
             name: self.name,
             command: self.command,
             depends_on: self.depends_on,
+            asset_inputs: self.asset_inputs,
             materializes: self.materializes,
             timeout_secs: self.timeout_secs.unwrap_or(crate::domain::job::DEFAULT_TASK_TIMEOUT_SECS),
             max_retries: self.max_retries.unwrap_or(0),
@@ -105,6 +112,7 @@ pub struct JobResponse {
     pub description: String,
     pub tasks: Vec<Task>,
     pub enabled: bool,
+    pub schedule: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -117,6 +125,7 @@ impl JobResponse {
             description: j.description.clone(),
             tasks: j.tasks.clone(),
             enabled: j.enabled,
+            schedule: j.schedule.clone(),
             created_at: j.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             updated_at: j.updated_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         }

@@ -125,6 +125,11 @@ impl SqliteRepo {
             description: row.get("description"),
             tasks,
             enabled: row.get::<i64, _>("enabled") != 0,
+            schedule: row.get("schedule"),
+            last_enqueued_at: row
+                .get::<Option<String>, _>("last_enqueued_at")
+                .map(|s| parse_dt("job.last_enqueued_at", &s))
+                .transpose()?,
             owner_id: parse_uuid("job.owner_id", row.get::<String, _>("owner_id").as_str())?,
             created_at: parse_dt("job.created_at", row.get::<String, _>("created_at").as_str())?,
             updated_at: parse_dt("job.updated_at", row.get::<String, _>("updated_at").as_str())?,
@@ -199,12 +204,14 @@ impl JobRepository for SqliteRepo {
     async fn create(&self, job: &Job) -> Result<(), RepositoryError> {
         let tasks = serde_json::to_string(&job.tasks)
             .map_err(|e| RepositoryError::InvalidData(e.to_string()))?;
-        sqlx::query("INSERT INTO jobs (id, name, description, tasks, enabled, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+        sqlx::query("INSERT INTO jobs (id, name, description, tasks, enabled, schedule, last_enqueued_at, owner_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(job.id.to_string())
             .bind(&job.name)
             .bind(&job.description)
             .bind(tasks)
             .bind(job.enabled as i64)
+            .bind(&job.schedule)
+            .bind(job.last_enqueued_at.map(|d| d.to_rfc3339_opts(SecondsFormat::Micros, true)))
             .bind(job.owner_id.to_string())
             .bind(job.created_at.to_rfc3339_opts(SecondsFormat::Micros, true))
             .bind(job.updated_at.to_rfc3339_opts(SecondsFormat::Micros, true))
@@ -217,11 +224,13 @@ impl JobRepository for SqliteRepo {
     async fn update(&self, job: &Job) -> Result<(), RepositoryError> {
         let tasks = serde_json::to_string(&job.tasks)
             .map_err(|e| RepositoryError::InvalidData(e.to_string()))?;
-        let res = sqlx::query("UPDATE jobs SET name = ?, description = ?, tasks = ?, enabled = ?, updated_at = ? WHERE id = ?")
+        let res = sqlx::query("UPDATE jobs SET name = ?, description = ?, tasks = ?, enabled = ?, schedule = ?, last_enqueued_at = ?, updated_at = ? WHERE id = ?")
             .bind(&job.name)
             .bind(&job.description)
             .bind(tasks)
             .bind(job.enabled as i64)
+            .bind(&job.schedule)
+            .bind(job.last_enqueued_at.map(|d| d.to_rfc3339_opts(SecondsFormat::Micros, true)))
             .bind(now_rfc3339())
             .bind(job.id.to_string())
             .execute(&self.pool)
@@ -246,6 +255,14 @@ impl JobRepository for SqliteRepo {
         let rows = sqlx::query("SELECT * FROM jobs ORDER BY created_at DESC LIMIT ? OFFSET ?")
             .bind(limit)
             .bind(offset)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(db_err)?;
+        rows.iter().map(Self::row_to_job).collect()
+    }
+
+    async fn list_scheduled(&self) -> Result<Vec<Job>, RepositoryError> {
+        let rows = sqlx::query("SELECT * FROM jobs WHERE schedule IS NOT NULL AND enabled = 1")
             .fetch_all(&self.pool)
             .await
             .map_err(db_err)?;
@@ -384,16 +401,16 @@ impl RunRepository for SqliteRepo {
         }
         tx.commit().await.map_err(db_err)?;
 
-        let mut runs = Vec::with_capacity(ids.len());
+        // One round-trip for all claimed runs (ids come from our own SELECT,
+        // so interpolating placeholders is safe).
+        let placeholders = ids.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+        let sql = format!("SELECT * FROM runs WHERE id IN ({placeholders})");
+        let mut query = sqlx::query(&sql);
         for id in &ids {
-            let row = sqlx::query("SELECT * FROM runs WHERE id = ?")
-                .bind(id)
-                .fetch_one(&self.pool)
-                .await
-                .map_err(db_err)?;
-            runs.push(Self::row_to_run(&row)?);
+            query = query.bind(id);
         }
-        Ok(runs)
+        let rows = query.fetch_all(&self.pool).await.map_err(db_err)?;
+        rows.iter().map(Self::row_to_run).collect()
     }
 
     async fn fail_interrupted(&self) -> Result<u64, RepositoryError> {
@@ -673,6 +690,7 @@ mod tests {
                 name: "T1".into(),
                 command: "echo hi".into(),
                 depends_on: vec![],
+                asset_inputs: vec![],
                 materializes: Some("a.b".into()),
                 timeout_secs: 60,
                 max_retries: 2,

@@ -3,6 +3,8 @@ import type { NextConfig } from "next";
 const backend = process.env.BACKEND_URL ?? "http://127.0.0.1:3002";
 
 const nextConfig: NextConfig = {
+  // Emits .next/standalone for the slim production image.
+  output: "standalone",
   async rewrites() {
     return [
       {

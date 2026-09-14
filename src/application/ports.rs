@@ -31,6 +31,8 @@ pub trait JobRepository: Send + Sync {
     async fn update(&self, job: &Job) -> Result<(), RepositoryError>;
     async fn get(&self, id: Uuid) -> Result<Option<Job>, RepositoryError>;
     async fn list(&self, limit: i64, offset: i64) -> Result<Vec<Job>, RepositoryError>;
+    /// All enabled jobs with a cron schedule (for the scheduler's enqueue pass).
+    async fn list_scheduled(&self) -> Result<Vec<Job>, RepositoryError>;
     async fn count(&self) -> Result<i64, RepositoryError>;
     async fn delete(&self, id: Uuid) -> Result<(), RepositoryError>;
 }

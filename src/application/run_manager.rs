@@ -3,6 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use chrono::Utc;
+use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
@@ -68,6 +69,9 @@ pub struct RunManager {
     assets: Arc<dyn AssetRepository>,
     executor: Arc<dyn TaskExecutor>,
     hub: RunHub,
+    /// Caps how many tasks of a single run execute concurrently, so a
+    /// wide DAG cannot fork-bomb the host.
+    task_permits: Arc<Semaphore>,
 }
 
 struct TaskOutcome {
@@ -83,8 +87,16 @@ impl RunManager {
         assets: Arc<dyn AssetRepository>,
         executor: Arc<dyn TaskExecutor>,
         hub: RunHub,
+        max_parallel_tasks: usize,
     ) -> Self {
-        Self { jobs, runs, assets, executor, hub }
+        Self {
+            jobs,
+            runs,
+            assets,
+            executor,
+            hub,
+            task_permits: Arc::new(Semaphore::new(max_parallel_tasks.max(1))),
+        }
     }
 
     pub fn hub(&self) -> &RunHub {
@@ -150,6 +162,7 @@ impl RunManager {
                     assets: self.assets.clone(),
                     token: token.clone(),
                     run_id: run.id,
+                    permits: self.task_permits.clone(),
                 };
                 set.spawn(async move { ctx.run_task(task, task_run).await });
             }
@@ -229,6 +242,7 @@ struct TaskCtx {
     assets: Arc<dyn AssetRepository>,
     token: CancellationToken,
     run_id: Uuid,
+    permits: Arc<Semaphore>,
 }
 
 impl TaskCtx {
@@ -263,6 +277,18 @@ impl TaskCtx {
             }
 
             let started = std::time::Instant::now();
+            // Bound the process fan-out per run; cancelled waits don't consume.
+            // (The semaphore is never closed, but fail safe rather than panic.)
+            let _permit = match self.permits.acquire().await {
+                Ok(p) => p,
+                Err(_) => {
+                    return TaskOutcome {
+                        failed: true,
+                        cancelled: false,
+                        error: Some("internal: task semaphore closed".into()),
+                    };
+                }
+            };
             match self
                 .executor
                 .execute(&task.command, Duration::from_secs(task.timeout_secs), self.token.clone())
